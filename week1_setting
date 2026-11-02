@@ -1,0 +1,112 @@
+Red Team Week 1 Infrastructure Build Report
+
+Objective: I deployed a segmented, firewalled network architecture (Management, Red Team, Target) using VirtualBox, 
+pfSense, Kali Linux, and Metasploitable 2 to meet the Week 1 requirements.
+
+1. Prerequisites and Environment
+I used my dual-booted Kali Linux machine as the host OS and installed VirtualBox as the hypervisor. 
+I downloaded the required ISOs for pfSense CE v2.7.x and Metasploitable 2.
+
+I ran these commands in my Kali terminal to download the necessary files:
+
+cd ~/Downloads
+
+I downloaded pfSense CE 2.7.2 by running:
+wget -q --show-progress -O - https://atxfiles.netgate.com/mirror/downloads/pfSense-CE-2.7.2-RELEASE-amd64.iso.gz | gzip -d -c > pfSense-CE-2.7.2-RELEASE-amd64.iso
+
+I downloaded and extracted Metasploitable 2 by running:
+wget https://downloads.sourceforge.net/project/metasploitable/Metasploitable2/Metasploitable2-Linux.zip
+unzip Metasploitable2-Linux.zip
+
+2. VirtualBox Network Infrastructure (Phase 1)
+I configured the virtual network wires before starting any VMs.
+
+A. Host-Only Networks
+I discovered VirtualBox restricts Host-Only IPs by default, so I allowed custom ranges by running:
+echo "* 10.0.0.0/8 192.168.0.0/16" | sudo tee /etc/vbox/networks.conf
+
+I created the Management Network (vboxnet0) by running:
+sudo VBoxManage hostonlyif create
+sudo VBoxManage hostonlyif ipconfig vboxnet0 --ip 192.168.1.1 --netmask 255.255.255.0
+
+I created the Red Team Network (vboxnet1) by running:
+sudo VBoxManage hostonlyif create
+sudo VBoxManage hostonlyif ipconfig vboxnet1 --ip 10.10.10.1 --netmask 255.255.255.0
+
+B. VM Adapter Assignments
+I opened the VirtualBox GUI and assigned the adapters as follows:
+
+For the pfSense VM, I set:
+Adapter 1 (WAN): Bridged Adapter (Host Wi-Fi)
+Adapter 2 (LAN): Host-only Adapter (vboxnet0)
+Adapter 3 (OPT1): Host-only Adapter (vboxnet1)
+Adapter 4 (OPT2): Internal Network (Target_Net)
+
+For the Metasploitable VM, I set:
+Adapter 1: Internal Network (Target_Net)
+
+3. Operating System Configurations (Phase 2)
+
+A. pfSense Router Setup
+I booted pfSense and assigned the interfaces at the console by selecting option 1:
+I set WAN = em0, LAN = em1, OPT1 = em2, OPT2 = em3.
+
+I set the IPs via Console Option 2:
+For LAN (Management), I set 192.168.1.2/24 and disabled DHCP.
+For OPT1 (Red Team), I set 10.10.10.2/24 and disabled DHCP.
+For OPT2 (Target), I set 10.20.20.1/24 and disabled DHCP.
+
+B. Metasploitable 2 Target Setup
+I logged into Metasploitable using msfadmin/msfadmin.
+I edited the network file by running: sudo nano /etc/network/interfaces
+I configured it exactly as:
+auto eth0
+iface eth0 inet static
+address 10.20.20.100
+netmask 255.255.255.0
+gateway 10.20.20.1
+I applied the settings by running: sudo /etc/init.d/networking restart
+
+4. Host Kali Routing (Phase 3)
+Since Kali is my physical host, I manually attached it to the virtual networks by running these commands in the Kali terminal:
+
+I assigned the Management IP by running:
+sudo ip addr add 192.168.1.100/24 dev vboxnet0
+sudo ip link set vboxnet0 up
+
+I assigned the Red Team IP by running:
+sudo ip addr del 10.10.10.1/24 dev vboxnet1 2>/dev/null
+sudo ip addr add 10.10.10.50/24 dev vboxnet1
+sudo ip link set vboxnet1 up
+
+I added the route to the target network via pfSense by running:
+sudo ip route add 10.20.20.0/24 via 10.10.10.2 dev vboxnet1
+
+5. Firewall Authorization (Phase 4)
+Traffic was initially blocked by pfSense's default deny policy.
+I logged into the pfSense WebGUI from my Kali browser at https://192.168.1.2 using admin/pfsense.
+I navigated to Firewall -> Rules -> OPT1 (Red Team).
+I clicked Add and configured the rule:
+Action: Pass
+Protocol: Any
+Source: any
+Destination: any
+I clicked Save, and then I clicked Apply Changes, which was the critical step to make the rule active.
+
+6. Validation
+From my Kali terminal, I tested the connectivity.
+
+I tested the connection to the Gateway by running:
+ping -c 3 10.10.10.2
+
+I tested the connection to the Target by running:
+ping -c 3 10.20.20.100
+
+I verified the target ports were exposed by running:
+nmap -sV 10.20.20.100
+
+Result: The pings returned replies and Nmap showed open ports (FTP, SSH, HTTP, etc.). The Week 1 network infrastructure is 100% operational.
+
+Maintenance Note
+Because Kali is my host OS, I noted that the vboxnet IP assignments are not persistent across reboots. 
+If my Kali machine restarts, I must re-run the commands in Phase 3 to restore connectivity.
